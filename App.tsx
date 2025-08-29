@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField } from 'firebase/firestore';
+import { db } from './utils/firebase';
 import { GamePhase } from './types';
-import type { Player, GameSettings, Guess } from './types';
+import type { Player, GameSettings, Guess, GameState } from './types';
 import HomeScreen from './components/HomeScreen';
 import LobbyScreen from './components/LobbyScreen';
 import JoinScreen from './components/JoinScreen';
@@ -12,85 +14,73 @@ import { soundManager } from './utils/sound';
 
 const generateNumber = (count: number): string[] => {
     const digits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-    const result: string[] = [];
+    let result: string[] = [];
     for (let i = 0; i < count; i++) {
         result.push(digits[Math.floor(Math.random() * digits.length)]);
     }
     return result;
 };
 
-const LOCAL_PLAYER_ID = 0;
-
 const calculateNextTurn = (
-    allPlayers: Player[],
-    lastGuesserId: number,
-    lastTargetId: number,
-    targetWasJustFound: boolean
+    game: GameState
 ) => {
-    const activePlayers = allPlayers.filter(p => !p.isFound);
+    const { players, turnOrder, currentPlayerId, targetPlayerId } = game;
+    const targetPlayer = players[targetPlayerId!];
+    const targetWasJustFound = targetPlayer.isFound;
+
+    const activePlayers = turnOrder.filter(id => !players[id].isFound);
     if (activePlayers.length <= 1) {
         return null; // Game over
     }
-    const activePlayerIds = activePlayers.map(p => p.id);
-
+    
     // 1. Determine the guessers for the current target, maintaining original player order.
-    const guessersForCurrentTarget = allPlayers
-        .map(p => p.id)
-        .filter(id => activePlayerIds.includes(id) && id !== lastTargetId);
-
+    const guessersForCurrentTarget = turnOrder.filter(id => activePlayers.includes(id) && id !== targetPlayerId);
+    
     // 2. Find the index of the last guesser in this round's sequence.
-    const lastGuesserIndex = guessersForCurrentTarget.indexOf(lastGuesserId);
+    const lastGuesserIndex = guessersForCurrentTarget.indexOf(currentPlayerId!);
 
     // 3. Check if the round should end.
     const isLastGuesserOfRound = lastGuesserIndex === guessersForCurrentTarget.length - 1;
     
     if (targetWasJustFound || isLastGuesserOfRound) {
         // --- START A NEW ROUND ---
-        // a. Find the next target. It's the next active player after lastTargetId in the original allPlayers order.
-        const lastTargetOriginalIndex = allPlayers.findIndex(p => p.id === lastTargetId);
-        let nextTargetId = -1;
-        let currentIndex = lastTargetOriginalIndex;
-        // Loop until a valid next target is found
+        // a. Find the next target. It's the next active player after lastTargetId in the turn order.
+        const lastTargetTurnIndex = turnOrder.indexOf(targetPlayerId!);
+        let nextTargetId = '';
+        let currentIndex = lastTargetTurnIndex;
         do {
-            currentIndex = (currentIndex + 1) % allPlayers.length;
-            if (activePlayerIds.includes(allPlayers[currentIndex].id)) {
-                nextTargetId = allPlayers[currentIndex].id;
+            currentIndex = (currentIndex + 1) % turnOrder.length;
+            const potentialTargetId = turnOrder[currentIndex];
+            if (activePlayers.includes(potentialTargetId)) {
+                nextTargetId = potentialTargetId;
             }
-        } while (nextTargetId === -1);
+        } while (nextTargetId === '');
 
         // b. Find the first guesser for this new target. It's the first active player that is not the new target.
-        const guessersForNewTarget = allPlayers
-            .map(p => p.id)
-            .filter(id => activePlayerIds.includes(id) && id !== nextTargetId);
-        
+        const guessersForNewTarget = turnOrder.filter(id => activePlayers.includes(id) && id !== nextTargetId);
         const nextGuesserId = guessersForNewTarget[0];
-
+        
         return { nextGuesserId, nextTargetId };
+
     } else {
         // --- CONTINUE CURRENT ROUND ---
         // The next guesser is simply the next one in the list.
         const nextGuesserId = guessersForCurrentTarget[lastGuesserIndex + 1];
-        const nextTargetId = lastTargetId; // Target stays the same.
+        const nextTargetId = targetPlayerId!; // Target stays the same.
         return { nextGuesserId, nextTargetId };
     }
 };
 
-
 const App: React.FC = () => {
-    const [gamePhase, setGamePhase] = useState<GamePhase>(GamePhase.Home);
-    const [settings, setSettings] = useState<GameSettings | null>(null);
-    const [players, setPlayers] = useState<Player[]>([]);
-    const [botConfigs, setBotConfigs] = useState<Array<{ name: string }>>([]);
-    const [localPlayerName, setLocalPlayerName] = useState<string>('');
-    const [isHost, setIsHost] = useState(false);
-    const [currentPlayerId, setCurrentPlayerId] = useState<number>(0);
-    const [targetPlayerId, setTargetPlayerId] = useState<number>(1);
-    const [winner, setWinner] = useState<Player | null>(null);
-    const [remainingTime, setRemainingTime] = useState(0);
-    const [lastBotGuess, setLastBotGuess] = useState<{ guesserId: number, guess: string[] } | null>(null);
+    const [game, setGame] = useState<GameState | null>(null);
+    const [localPlayerId, setLocalPlayerId] = useState<string | null>(() => sessionStorage.getItem('localPlayerId'));
+    const [roomId, setRoomId] = useState<string | null>(() => sessionStorage.getItem('roomId'));
+    const [error, setError] = useState<string>('');
     const [sfxEnabled, setSfxEnabled] = useState(() => localStorage.getItem('sfxEnabled') !== 'false');
     const [bgmEnabled, setBgmEnabled] = useState(() => localStorage.getItem('bgmEnabled') !== 'false');
+    const [remainingTime, setRemainingTime] = useState(0);
 
+    // Sound effects and BGM management
     useEffect(() => {
         soundManager.setSfxEnabled(sfxEnabled);
         localStorage.setItem('sfxEnabled', String(sfxEnabled));
@@ -99,137 +89,47 @@ const App: React.FC = () => {
     useEffect(() => {
         soundManager.setBgmEnabled(bgmEnabled);
         localStorage.setItem('bgmEnabled', String(bgmEnabled));
-
-        if (gamePhase === GamePhase.Playing && bgmEnabled) {
+        if (game?.phase === GamePhase.Playing && bgmEnabled) {
             soundManager.startBgm();
         } else {
             soundManager.stopBgm();
         }
-    }, [bgmEnabled, gamePhase]);
-    
-    const handleSfxToggle = () => setSfxEnabled(prev => !prev);
-    const handleBgmToggle = () => setBgmEnabled(prev => !prev);
-    
-    const handleSendMessage = (playerId: number, message: string) => {
-        setPlayers(currentPlayers => 
-            currentPlayers.map(p => 
-                p.id === playerId 
-                ? { ...p, lastMessage: { text: message, timestamp: Date.now() } } 
-                : p
-            )
-        );
-        // This is where a call to a backend/Firebase would be made for online play.
-    };
+    }, [bgmEnabled, game?.phase]);
 
-    const handleSubmitGuess = useCallback((guess: string[], guesserId: number, currentTargetId: number, playersState: Player[]) => {
-        if (!settings) return;
-        const targetPlayer = playersState.find(p => p.id === currentTargetId);
-        const guesserPlayer = playersState.find(p => p.id === guesserId);
-        if (!targetPlayer || targetPlayer.isFound || !guesserPlayer) return;
-
-        const secret = [...targetPlayer.secretNumber];
-        const guessAttempt = [...guess];
-        let correct = 0;
-        let misplaced = 0;
-        
-        for (let i = 0; i < settings.digitCount; i++) {
-            if (secret[i] === guessAttempt[i]) {
-                correct++;
-                secret[i] = 'C';
-                guessAttempt[i] = 'C';
-            }
-        }
-
-        for (let i = 0; i < settings.digitCount; i++) {
-            if (guessAttempt[i] === 'C') continue;
-            const misplacedIndex = secret.findIndex(digit => digit === guessAttempt[i]);
-            if (misplacedIndex !== -1) {
-                misplaced++;
-                secret[misplacedIndex] = 'M';
-            }
-        }
-
-        const newGuess: Guess = { value: guess.join(''), correct, misplaced, guesserId, guesserName: guesserPlayer.name };
-        const playerFound = correct === settings.digitCount;
-        
-        const updatedPlayers = playersState.map(p => 
-            p.id === currentTargetId ? { ...p, history: [...p.history, newGuess], isFound: playerFound || p.isFound } : p
-        );
-
-        setPlayers(updatedPlayers);
-
-        const activePlayers = updatedPlayers.filter(p => !p.isFound);
-        if (activePlayers.length <= 1) {
-            const finalWinner = activePlayers[0] || playersState.find(p => !p.isFound);
-            if(finalWinner){
-                let availableLosingTitles = [...LOSING_TITLES].sort(() => 0.5 - Math.random());
-                const playersWithTitles = updatedPlayers.map(p => {
-                    if (p.id === finalWinner.id) {
-                        return { ...p, title: WINNING_TITLES[Math.floor(Math.random() * WINNING_TITLES.length)] };
-                    }
-                    return { ...p, title: availableLosingTitles.pop() || "ผู้ร่วมชะตากรรม" };
-                });
-                setPlayers(playersWithTitles);
-                const winnerWithTitle = playersWithTitles.find(p => p.id === finalWinner.id) || null;
-                setWinner(winnerWithTitle);
-                soundManager.play(winnerWithTitle?.id === LOCAL_PLAYER_ID ? 'win' : 'lose');
-            } else {
-                 setPlayers(updatedPlayers);
-                 setWinner(null);
-                 soundManager.play('lose');
-            }
-            setGamePhase(GamePhase.GameOver);
+    // Firestore real-time subscription
+    useEffect(() => {
+        if (!roomId) {
+            setGame(null);
             return;
         }
-
-        const nextTurn = calculateNextTurn(updatedPlayers, guesserId, currentTargetId, playerFound);
-        if (nextTurn) {
-            setCurrentPlayerId(nextTurn.nextGuesserId);
-            setTargetPlayerId(nextTurn.nextTargetId);
-
-            if (nextTurn.nextGuesserId !== LOCAL_PLAYER_ID) {
-                setTimeout(() => {
-                    setPlayers(latestPlayers => {
-                        if (latestPlayers.filter(p => !p.isFound).length > 1) {
-                            const botGuess = generateNumber(settings.digitCount);
-                            setLastBotGuess({ guesserId: nextTurn.nextGuesserId, guess: botGuess });
-                            handleSubmitGuess(botGuess, nextTurn.nextGuesserId, nextTurn.nextTargetId, latestPlayers);
-                        }
-                        return latestPlayers;
-                    });
-                }, 1500 + Math.random() * 1000);
-            }
-        }
-    }, [settings]);
-
-    const handleTurnTimeout = useCallback(() => {
-        if (!settings) return;
-        setPlayers(currentPlayers => {
-            const nextTurn = calculateNextTurn(currentPlayers, currentPlayerId, targetPlayerId, false);
-            if (nextTurn) {
-                setCurrentPlayerId(nextTurn.nextGuesserId);
-                setTargetPlayerId(nextTurn.nextTargetId);
-
-                if (nextTurn.nextGuesserId !== LOCAL_PLAYER_ID) {
-                    setTimeout(() => {
-                         setPlayers(latestPlayers => {
-                            if (latestPlayers.filter(p => !p.isFound).length > 1) {
-                                const botGuess = generateNumber(settings.digitCount);
-                                setLastBotGuess({ guesserId: nextTurn.nextGuesserId, guess: botGuess });
-                                handleSubmitGuess(botGuess, nextTurn.nextGuesserId, nextTurn.nextTargetId, latestPlayers);
-                            }
-                            return latestPlayers;
-                        });
-                    }, 1500 + Math.random() * 1000);
+        const gameDocRef = doc(db, 'games', roomId);
+        const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const gameData = docSnap.data() as GameState;
+                setGame(gameData);
+                setError('');
+                // If we are in this room, re-confirm our session storage
+                sessionStorage.setItem('roomId', roomId);
+                if (localPlayerId && gameData.players[localPlayerId]) {
+                    sessionStorage.setItem('localPlayerId', localPlayerId);
                 }
+            } else {
+                setError(`ไม่พบห้อง ${roomId}`);
+                handleBackToHome();
             }
-            return currentPlayers;
+        }, (err) => {
+            console.error("Firebase subscription error:", err);
+            setError("เกิดข้อผิดพลาดในการเชื่อมต่อ");
+            handleBackToHome();
         });
-    }, [settings, currentPlayerId, targetPlayerId, handleSubmitGuess]);
 
+        return () => unsubscribe();
+    }, [roomId, localPlayerId]);
+
+    // Turn timer logic
     useEffect(() => {
-        if (gamePhase === GamePhase.Playing && settings?.turnTimeLimit && settings.turnTimeLimit > 0 && currentPlayerId === LOCAL_PLAYER_ID) {
-            setRemainingTime(settings.turnTimeLimit);
+        if (game?.phase === GamePhase.Playing && game.settings.turnTimeLimit > 0 && game.currentPlayerId === localPlayerId) {
+            setRemainingTime(game.settings.turnTimeLimit);
             const timer = setInterval(() => {
                 setRemainingTime(prev => {
                     if (prev <= 1) {
@@ -242,124 +142,317 @@ const App: React.FC = () => {
             }, 1000);
             return () => clearInterval(timer);
         }
-    }, [gamePhase, settings, currentPlayerId, handleTurnTimeout]);
+    }, [game?.phase, game?.settings?.turnTimeLimit, game?.currentPlayerId, localPlayerId]);
     
-    const handleCreateLobby = (playerName: string) => {
-        setLocalPlayerName(playerName);
-        setIsHost(true);
-        setGamePhase(GamePhase.Lobby);
+    // Bot turn logic (runs only on host's client)
+    useEffect(() => {
+        if (!game || game.phase !== GamePhase.Playing || game.hostId !== localPlayerId) return;
+
+        const currentPlayer = game.players[game.currentPlayerId!];
+        if (currentPlayer?.isBot) {
+            // Delay bot action to make it feel more natural
+            const botThinkTime = 1500 + Math.random() * 1000;
+            const timer = setTimeout(() => {
+                const botGuess = generateNumber(game.settings.digitCount);
+                handleSubmitGuess(botGuess, true); // isBotGuess = true
+            }, botThinkTime);
+            return () => clearTimeout(timer);
+        }
+    }, [game?.currentPlayerId, game?.phase, game?.hostId, localPlayerId]);
+
+    const handleCreateLobby = async (playerName: string) => {
+        const newRoomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+        const newPlayerId = doc(collection(db, 'temp')).id;
+        
+        const hostPlayer: Player = {
+            id: newPlayerId, name: playerName, secretNumber: [], isFound: false, history: []
+        };
+        
+        const initialSettings: GameSettings = { playerCount: 2, digitCount: 4, turnTimeLimit: 30 };
+        
+        const newGame: GameState = {
+            id: newRoomCode,
+            phase: GamePhase.Lobby,
+            settings: initialSettings,
+            players: { [newPlayerId]: hostPlayer },
+            hostId: newPlayerId,
+            turnOrder: [],
+            createdAt: Date.now()
+        };
+
+        try {
+            await setDoc(doc(db, "games", newRoomCode), newGame);
+            setRoomId(newRoomCode);
+            setLocalPlayerId(newPlayerId);
+        } catch (err) {
+            console.error("Error creating lobby:", err);
+            setError("ไม่สามารถสร้างห้องได้ โปรดลองอีกครั้ง");
+        }
     };
 
-    const handleJoinRequest = (playerName: string) => {
-        setLocalPlayerName(playerName);
-        setGamePhase(GamePhase.Join);
-    };
+    const handleJoinLobby = async (playerName: string, roomCode: string) => {
+        const gameDocRef = doc(db, 'games', roomCode);
+        try {
+            const gameSnap = await getDoc(gameDocRef);
+            if (!gameSnap.exists()) {
+                setError("ไม่พบห้องนี้");
+                return;
+            }
+            const gameData = gameSnap.data() as GameState;
+            if (gameData.phase !== GamePhase.Lobby) {
+                setError("ไม่สามารถเข้าร่วมห้องที่เริ่มเกมไปแล้วได้");
+                return;
+            }
+            if (Object.keys(gameData.players).length >= gameData.settings.playerCount) {
+                setError("ห้องเต็มแล้ว");
+                return;
+            }
 
-    const handleJoinLobby = (roomCode: string) => {
-        // NOTE FOR DEVS: This is where you would call Firebase/backend to join a room.
-        // On success, you'd get the lobby data and players, then transition to the Lobby phase.
-        console.log(`Attempting to join room with code: ${roomCode}`);
-        setIsHost(false);
-        setGamePhase(GamePhase.Lobby);
+            const newPlayerId = doc(collection(db, 'temp')).id;
+            const newPlayer: Player = { id: newPlayerId, name: playerName, secretNumber: [], isFound: false, history: [] };
+            
+            await updateDoc(gameDocRef, { [`players.${newPlayerId}`]: newPlayer });
+
+            setRoomId(roomCode);
+            setLocalPlayerId(newPlayerId);
+
+        } catch (err) {
+            console.error("Error joining lobby:", err);
+            setError("เกิดข้อผิดพลาดในการเข้าร่วมห้อง");
+        }
     };
     
     const handleBackToHome = () => {
-        setGamePhase(GamePhase.Home);
-        setLocalPlayerName('');
-        setIsHost(false);
-    }
-
-    const handleStartGame = useCallback((playersInLobby: Array<{ name: string; isBot: boolean }>, newSettings: GameSettings) => {
-        setSettings(newSettings);
+        setRoomId(null);
+        setLocalPlayerId(null);
+        setGame(null);
+        setError('');
+        sessionStorage.removeItem('roomId');
+        sessionStorage.removeItem('localPlayerId');
+    };
+    
+    const handleStartGame = async () => {
+        if (!game || game.hostId !== localPlayerId) return;
         
-        const localPlayerData = playersInLobby.find(p => !p.isBot);
-        if (!localPlayerData) {
-            handleRestart();
-            return;
+        // Fill remaining slots with bots if necessary
+        const currentPlayersCount = Object.keys(game.players).length;
+        const botsToAddCount = game.settings.playerCount - currentPlayersCount;
+        let finalPlayers = { ...game.players };
+
+        for(let i = 0; i < botsToAddCount; i++) {
+            const botId = doc(collection(db, 'temp')).id;
+            const botPlayer: Player = {
+                id: botId,
+                name: `Bot ${i + 1}`,
+                secretNumber: generateNumber(game.settings.digitCount),
+                isFound: false,
+                history: [],
+                isBot: true,
+                isReady: true // Bots are always ready
+            };
+            finalPlayers[botId] = botPlayer;
+        }
+        
+        await updateDoc(doc(db, 'games', game.id), {
+            players: finalPlayers,
+            phase: GamePhase.Setup,
+        });
+    };
+    
+    const handleSetupComplete = async (secret: string[]) => {
+        if (!game || !localPlayerId) return;
+
+        await updateDoc(doc(db, 'games', game.id), {
+            [`players.${localPlayerId}.secretNumber`]: secret,
+            [`players.${localPlayerId}.isReady`]: true,
+        });
+    };
+    
+    // Logic to transition from Setup to Playing (runs on host's client)
+    useEffect(() => {
+        if (game?.phase !== GamePhase.Setup || game.hostId !== localPlayerId) return;
+
+        const allPlayersReady = Object.values(game.players).every(p => p.isReady);
+
+        if (allPlayersReady) {
+            const turnOrder = Object.keys(game.players).sort(() => Math.random() - 0.5);
+            const initialTargetId = turnOrder.find(id => id !== turnOrder[0]);
+
+            updateDoc(doc(db, 'games', game.id), {
+                phase: GamePhase.Playing,
+                turnOrder,
+                currentPlayerId: turnOrder[0],
+                targetPlayerId: initialTargetId
+            });
+        }
+    }, [game?.phase, game?.players, game?.hostId, localPlayerId]);
+
+    const handleSubmitGuess = useCallback(async (guess: string[], isBotGuess: boolean = false) => {
+        if (!game || (!isBotGuess && game.currentPlayerId !== localPlayerId)) return;
+        
+        const { currentPlayerId, targetPlayerId, settings, players } = game;
+        const guesserId = currentPlayerId!;
+        const currentTargetId = targetPlayerId!;
+
+        const targetPlayer = players[currentTargetId];
+        const guesserPlayer = players[guesserId];
+
+        if (!targetPlayer || targetPlayer.isFound || !guesserPlayer) return;
+
+        const secret = [...targetPlayer.secretNumber];
+        const guessAttempt = [...guess];
+        let correct = 0, misplaced = 0;
+        
+        for (let i = 0; i < settings.digitCount; i++) {
+            if (secret[i] === guessAttempt[i]) {
+                correct++; secret[i] = 'C'; guessAttempt[i] = 'C';
+            }
+        }
+        for (let i = 0; i < settings.digitCount; i++) {
+            if (guessAttempt[i] === 'C') continue;
+            const misplacedIndex = secret.indexOf(guessAttempt[i]);
+            if (misplacedIndex !== -1) {
+                misplaced++; secret[misplacedIndex] = 'M';
+            }
         }
 
-        const localPlayer: Player = { 
-            id: LOCAL_PLAYER_ID, 
-            name: localPlayerData.name, 
-            secretNumber: [], 
-            isFound: false, 
-            history: [] 
+        const newGuess: Guess = { value: guess.join(''), correct, misplaced, guesserId, guesserName: guesserPlayer.name };
+        const playerFound = correct === settings.digitCount;
+        
+        const updatedGameForCalc: GameState = {
+            ...game,
+            players: {
+                ...game.players,
+                [currentTargetId]: {
+                    ...targetPlayer,
+                    history: [...targetPlayer.history, newGuess],
+                    isFound: playerFound || targetPlayer.isFound
+                }
+            }
         };
 
-        const botsToCreate = playersInLobby.filter(p => p.isBot).map(p => ({ name: p.name }));
-        setBotConfigs(botsToCreate);
-        setPlayers([localPlayer]);
-        setGamePhase(GamePhase.Setup);
-    }, []);
+        const activePlayersCount = Object.values(updatedGameForCalc.players).filter(p => !p.isFound).length;
 
-    const handleSetupComplete = useCallback((secret: string[]) => {
-        if (!settings) return;
-        const localPlayer = players[0];
-        const updatedLocalPlayer = { ...localPlayer, secretNumber: secret };
-        
-        const botPlayers: Player[] = botConfigs.map((botConfig, i) => ({
-            id: i + 1,
-            name: botConfig.name,
-            secretNumber: generateNumber(settings.digitCount),
-            isFound: false,
-            history: [],
-        }));
-        
-        const allPlayers = [updatedLocalPlayer, ...botPlayers];
-        setPlayers(allPlayers);
-        
-        setTargetPlayerId(allPlayers.length > 1 ? 1 : 0);
-        setCurrentPlayerId(LOCAL_PLAYER_ID);
-        setGamePhase(GamePhase.Playing);
-    }, [settings, players, botConfigs]);
+        if (activePlayersCount <= 1) {
+            const finalWinner = Object.values(updatedGameForCalc.players).find(p => !p.isFound);
+            let availableLosingTitles = [...LOSING_TITLES].sort(() => 0.5 - Math.random());
+            let playersWithTitles = { ...updatedGameForCalc.players };
+            Object.keys(playersWithTitles).forEach(pid => {
+                 playersWithTitles[pid].title = pid === finalWinner?.id
+                    ? WINNING_TITLES[Math.floor(Math.random() * WINNING_TITLES.length)]
+                    : (availableLosingTitles.pop() || "ผู้ร่วมชะตากรรม");
+            });
 
-    const handleRestart = useCallback(() => {
-        setGamePhase(GamePhase.Home);
-        setSettings(null);
-        setPlayers([]);
-        setWinner(null);
-        setBotConfigs([]);
-        setLocalPlayerName('');
-        setIsHost(false);
-    }, []);
+            await updateDoc(doc(db, 'games', game.id), {
+                phase: GamePhase.GameOver,
+                players: playersWithTitles,
+                winnerId: finalWinner?.id || null,
+                [`players.${currentTargetId}.history`]: [...targetPlayer.history, newGuess],
+                [`players.${currentTargetId}.isFound`]: playerFound || targetPlayer.isFound
+            });
+            soundManager.play(finalWinner?.id === localPlayerId ? 'win' : 'lose');
+        } else {
+            const nextTurn = calculateNextTurn(updatedGameForCalc);
+            await updateDoc(doc(db, 'games', game.id), {
+                currentPlayerId: nextTurn!.nextGuesserId,
+                targetPlayerId: nextTurn!.nextTargetId,
+                lastBotGuess: guesserPlayer.isBot ? { guesserId, guess } : deleteField(),
+                [`players.${currentTargetId}.history`]: [...targetPlayer.history, newGuess],
+                [`players.${currentTargetId}.isFound`]: playerFound || targetPlayer.isFound
+            });
+        }
+    }, [game, localPlayerId]);
+    
+    const handleTurnTimeout = useCallback(async () => {
+        if (!game || game.currentPlayerId !== localPlayerId || game.settings.turnTimeLimit <= 0) return;
+        
+        const nextTurn = calculateNextTurn(game);
+        if (nextTurn) {
+             await updateDoc(doc(db, 'games', game.id), {
+                currentPlayerId: nextTurn.nextGuesserId,
+                targetPlayerId: nextTurn.nextTargetId
+             });
+        }
+    }, [game, localPlayerId]);
+    
+    const handleSendMessage = async (message: string) => {
+        if (!game || !localPlayerId) return;
+        await updateDoc(doc(db, 'games', game.id), {
+            [`players.${localPlayerId}.lastMessage`]: { text: message, timestamp: Date.now() }
+        });
+    };
+
+    const handleUpdateSettings = async (newSettings: Partial<GameSettings>) => {
+        if (!game || game.hostId !== localPlayerId) return;
+        let settingsUpdate = {};
+        for (const [key, value] of Object.entries(newSettings)) {
+            settingsUpdate[`settings.${key}`] = value;
+        }
+        await updateDoc(doc(db, 'games', game.id), settingsUpdate);
+    };
+
+    const handleAddBot = async () => {
+        if (!game || game.hostId !== localPlayerId || Object.keys(game.players).length >= game.settings.playerCount) return;
+        const botId = doc(collection(db, 'temp')).id;
+        const botPlayer: Player = {
+            id: botId,
+            name: `Bot ${Object.values(game.players).filter(p => p.isBot).length + 1}`,
+            secretNumber: [], isFound: false, history: [], isBot: true
+        };
+        await updateDoc(doc(db, 'games', game.id), { [`players.${botId}`]: botPlayer });
+    };
+
+    const handleRemovePlayer = async (playerId: string) => {
+        if (!game || game.hostId !== localPlayerId) return;
+        await updateDoc(doc(db, 'games', game.id), { [`players.${playerId}`]: deleteField() });
+    };
 
     const renderContent = () => {
-        switch (gamePhase) {
-            case GamePhase.Home:
-                return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={handleJoinRequest} />;
+        if (!game) {
+            if (roomId) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">กำลังโหลดห้อง...</div>
+            return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={(name) => setGame({ phase: GamePhase.Join } as GameState)} error={error} />;
+        }
+
+        switch (game.phase) {
             case GamePhase.Join:
-                return <JoinScreen playerName={localPlayerName} onJoinLobby={handleJoinLobby} onBack={handleBackToHome} />;
+                return <JoinScreen onJoinLobby={handleJoinLobby} onBack={() => setGame(null)} error={error} />;
+            case GamePhase.Lobby:
+                return <LobbyScreen 
+                            game={game} localPlayerId={localPlayerId!} 
+                            onStartGame={handleStartGame} 
+                            onUpdateSettings={handleUpdateSettings}
+                            onAddBot={handleAddBot} onRemovePlayer={handleRemovePlayer}
+                            sfxEnabled={sfxEnabled} bgmEnabled={bgmEnabled}
+                            onSfxToggle={() => setSfxEnabled(p => !p)} onBgmToggle={() => setBgmEnabled(p => !p)}
+                        />;
             case GamePhase.Setup:
-                return <SetupScreen settings={settings!} playerName={players[0]?.name || ''} onSetupComplete={handleSetupComplete} />;
+                const localPlayer = game.players[localPlayerId!];
+                return <SetupScreen 
+                            settings={game.settings} 
+                            playerName={localPlayer?.name || ''}
+                            isReady={localPlayer?.isReady || false}
+                            allPlayersReady={Object.values(game.players).every(p => p.isReady)}
+                            onSetupComplete={handleSetupComplete}
+                        />;
             case GamePhase.Playing:
                 return <GameScreen 
-                            players={players} 
-                            settings={settings!}
-                            currentPlayerId={currentPlayerId} 
-                            targetPlayerId={targetPlayerId}
-                            onSubmitGuess={(guess) => handleSubmitGuess(guess, LOCAL_PLAYER_ID, targetPlayerId, players)}
-                            localPlayerId={LOCAL_PLAYER_ID}
-                            remainingTime={remainingTime}
-                            sfxEnabled={sfxEnabled}
-                            bgmEnabled={bgmEnabled}
-                            onSfxToggle={handleSfxToggle}
-                            onBgmToggle={handleBgmToggle}
+                            game={game}
+                            localPlayerId={localPlayerId!}
+                            onSubmitGuess={handleSubmitGuess}
                             onSendMessage={handleSendMessage}
-                            lastBotGuess={lastBotGuess}
+                            remainingTime={remainingTime}
+                            sfxEnabled={sfxEnabled} bgmEnabled={bgmEnabled}
+                            onSfxToggle={() => setSfxEnabled(p => !p)} onBgmToggle={() => setBgmEnabled(p => !p)}
                         />;
             case GamePhase.GameOver:
-                return <GameOverScreen players={players} winner={winner} onRestart={handleRestart} />;
-            case GamePhase.Lobby:
-            default:
-                return <LobbyScreen
-                            isHost={isHost}
-                            hostName={localPlayerName}
-                            onStartGame={handleStartGame} 
-                            sfxEnabled={sfxEnabled}
-                            bgmEnabled={bgmEnabled}
-                            onSfxToggle={handleSfxToggle}
-                            onBgmToggle={handleBgmToggle}
+                 return <GameOverScreen 
+                            players={Object.values(game.players)} 
+                            winner={game.players[game.winnerId!] || null} 
+                            onRestart={handleBackToHome}
                         />;
+            case GamePhase.Home:
+            default:
+                 return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={(name) => setGame({ phase: GamePhase.Join } as GameState)} error={error} />;
         }
     };
 
