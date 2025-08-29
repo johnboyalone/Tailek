@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField } from 'firebase/firestore';
-import { db, DocumentData, QueryDocumentSnapshot } from './utils/firebase';
+import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField, DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
+import { db } from './utils/firebase';
 import { GamePhase } from './types';
 import type { Player, GameSettings, Guess, GameState } from './types';
 import HomeScreen from './components/HomeScreen';
