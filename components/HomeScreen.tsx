@@ -4,9 +4,10 @@ import { soundManager } from '../utils/sound';
 interface HomeScreenProps {
   onCreateLobby: (playerName: string) => void;
   onJoinRequest: (playerName: string) => void;
+  error?: string;
 }
 
-const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateLobby, onJoinRequest }) => {
+const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateLobby, onJoinRequest, error }) => {
   const [playerName, setPlayerName] = useState('');
 
   const handleCreate = () => {
@@ -41,6 +42,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateLobby, onJoinRequest })
             maxLength={15}
           />
         </div>
+        
+        {error && <p className="text-red-400 text-center text-sm">{error}</p>}
+
         <div className="space-y-3">
           <button
             onClick={handleCreate}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useId } from 'react';
-import type { Player, GameSettings } from '../types';
+import type { Player, GameState } from '../types';
 import { CheckIcon, RefreshIcon, MusicNoteIcon, MusicNoteOffIcon, VolumeUpIcon, VolumeOffIcon } from './icons';
 import { Numpad } from './Numpad';
 import { soundManager } from '../utils/sound';
@@ -67,19 +67,15 @@ const AnimatedArrow: React.FC<AnimatedArrowProps> = ({ start, end }) => {
 
 
 interface GameScreenProps {
-  players: Player[];
-  settings: GameSettings;
-  currentPlayerId: number;
-  targetPlayerId: number;
+  game: GameState;
   onSubmitGuess: (guess: string[]) => void;
-  localPlayerId: number;
+  localPlayerId: string;
   remainingTime: number;
   sfxEnabled: boolean;
   bgmEnabled: boolean;
   onSfxToggle: () => void;
   onBgmToggle: () => void;
-  onSendMessage: (playerId: number, message: string) => void;
-  lastBotGuess: { guesserId: number, guess: string[] } | null;
+  onSendMessage: (message: string) => void;
 }
 
 const GuessHistoryItem: React.FC<{ guess: import('../types').Guess }> = ({ guess }) => (
@@ -107,7 +103,7 @@ const PlayerCard: React.FC<{
     player: Player; 
     isCurrentGuesser: boolean; 
     isTarget: boolean; 
-    localPlayerId: number;
+    localPlayerId: string;
     refProp: (el: HTMLDivElement | null) => void;
 }> = ({ player, isCurrentGuesser, isTarget, localPlayerId, refProp }) => {
     const [visibleMessage, setVisibleMessage] = useState<{ text: string; timestamp: number } | null>(null);
@@ -160,7 +156,7 @@ const PlayerCard: React.FC<{
     );
 };
 
-const GameScreen: React.FC<GameScreenProps> = ({ players, settings, currentPlayerId, targetPlayerId, onSubmitGuess, localPlayerId, remainingTime, sfxEnabled, bgmEnabled, onSfxToggle, onBgmToggle, onSendMessage, lastBotGuess }) => {
+const GameScreen: React.FC<GameScreenProps> = ({ game, onSubmitGuess, localPlayerId, remainingTime, sfxEnabled, bgmEnabled, onSfxToggle, onBgmToggle, onSendMessage }) => {
     const [currentGuess, setCurrentGuess] = useState<string[]>([]);
     const [error, setError] = useState('');
     const [arrowCoords, setArrowCoords] = useState<AnimatedArrowProps>({ start: null, end: null });
@@ -168,7 +164,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ players, settings, currentPlaye
     const [chatInput, setChatInput] = useState('');
 
     const mainContainerRef = useRef<HTMLDivElement>(null);
-    const playerCardRefs = useRef<(HTMLDivElement | null)[]>([]);
+    const playerCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+    
+    const { players, settings, currentPlayerId, targetPlayerId, lastBotGuess } = game;
 
     const isMyTurn = currentPlayerId === localPlayerId;
 
@@ -182,6 +180,8 @@ const GameScreen: React.FC<GameScreenProps> = ({ players, settings, currentPlaye
     
     useEffect(() => {
         const updateCoords = () => {
+            if (!currentPlayerId || !targetPlayerId) return;
+
             const container = mainContainerRef.current;
             const guesserEl = playerCardRefs.current[currentPlayerId];
             const targetEl = playerCardRefs.current[targetPlayerId];
@@ -262,14 +262,15 @@ const GameScreen: React.FC<GameScreenProps> = ({ players, settings, currentPlaye
     const handleSendChat = (e: React.FormEvent) => {
         e.preventDefault();
         if (!chatInput.trim()) return;
-        onSendMessage(localPlayerId, chatInput.trim());
+        onSendMessage(chatInput.trim());
         setChatInput('');
         soundManager.play('click');
     };
 
-    const currentPlayer = players.find(p => p.id === currentPlayerId);
-    const targetPlayer = players.find(p => p.id === targetPlayerId);
-    const gridLayoutClass = players.length > 4 ? 'grid-cols-3' : 'grid-cols-2';
+    const playerList = Object.values(players);
+    const currentPlayer = players[currentPlayerId || ''];
+    const targetPlayer = players[targetPlayerId || ''];
+    const gridLayoutClass = playerList.length > 4 ? 'grid-cols-3' : 'grid-cols-2';
     
     return (
         <div className="h-screen bg-slate-900 text-white flex flex-col items-center p-2 overflow-hidden">
@@ -300,7 +301,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ players, settings, currentPlaye
 
             <main ref={mainContainerRef} className={`relative flex-grow w-full max-w-md grid ${gridLayoutClass} gap-2 py-2`}>
                  <AnimatedArrow key={`${currentPlayerId}-${targetPlayerId}`} start={arrowCoords.start} end={arrowCoords.end} />
-                {players.map(player => (
+                {playerList.map(player => (
                     <PlayerCard
                         key={player.id}
                         player={player}
