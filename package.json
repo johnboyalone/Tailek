@@ -9,13 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "firebase": "^12.2.1"
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "firebase": "latest"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "@types/node": "22.14.0",
+    "typescript": "5.8.2",
+    "vite": "6.2.0"
   }
 }
