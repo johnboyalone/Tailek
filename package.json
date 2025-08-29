@@ -11,7 +11,7 @@
   "dependencies": {
     "react": "19.1.1",
     "react-dom": "19.1.1",
-    "firebase": "latest"
+    "firebase": "10.12.2"
   },
   "devDependencies": {
     "@types/node": "22.14.0",
