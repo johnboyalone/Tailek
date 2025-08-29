@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField } from 'firebase/firestore';
-import { db } from './utils/firebase';
+import { db, DocumentData, QueryDocumentSnapshot } from './utils/firebase';
 import { GamePhase } from './types';
 import type { Player, GameSettings, Guess, GameState } from './types';
 import HomeScreen from './components/HomeScreen';
@@ -33,18 +33,13 @@ const calculateNextTurn = (
         return null; // Game over
     }
     
-    // 1. Determine the guessers for the current target, maintaining original player order.
     const guessersForCurrentTarget = turnOrder.filter(id => activePlayers.includes(id) && id !== targetPlayerId);
     
-    // 2. Find the index of the last guesser in this round's sequence.
     const lastGuesserIndex = guessersForCurrentTarget.indexOf(currentPlayerId!);
 
-    // 3. Check if the round should end.
     const isLastGuesserOfRound = lastGuesserIndex === guessersForCurrentTarget.length - 1;
     
     if (targetWasJustFound || isLastGuesserOfRound) {
-        // --- START A NEW ROUND ---
-        // a. Find the next target. It's the next active player after lastTargetId in the turn order.
         const lastTargetTurnIndex = turnOrder.indexOf(targetPlayerId!);
         let nextTargetId = '';
         let currentIndex = lastTargetTurnIndex;
@@ -56,17 +51,14 @@ const calculateNextTurn = (
             }
         } while (nextTargetId === '');
 
-        // b. Find the first guesser for this new target. It's the first active player that is not the new target.
         const guessersForNewTarget = turnOrder.filter(id => activePlayers.includes(id) && id !== nextTargetId);
         const nextGuesserId = guessersForNewTarget[0];
         
         return { nextGuesserId, nextTargetId };
 
     } else {
-        // --- CONTINUE CURRENT ROUND ---
-        // The next guesser is simply the next one in the list.
         const nextGuesserId = guessersForCurrentTarget[lastGuesserIndex + 1];
-        const nextTargetId = targetPlayerId!; // Target stays the same.
+        const nextTargetId = targetPlayerId!;
         return { nextGuesserId, nextTargetId };
     }
 };
@@ -80,7 +72,6 @@ const App: React.FC = () => {
     const [bgmEnabled, setBgmEnabled] = useState(() => localStorage.getItem('bgmEnabled') !== 'false');
     const [remainingTime, setRemainingTime] = useState(0);
 
-    // Sound effects and BGM management
     useEffect(() => {
         soundManager.setSfxEnabled(sfxEnabled);
         localStorage.setItem('sfxEnabled', String(sfxEnabled));
@@ -96,19 +87,17 @@ const App: React.FC = () => {
         }
     }, [bgmEnabled, game?.phase]);
 
-    // Firestore real-time subscription
     useEffect(() => {
         if (!roomId) {
             setGame(null);
             return;
         }
         const gameDocRef = doc(db, 'games', roomId);
-        const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
+        const unsubscribe = onSnapshot(gameDocRef, (docSnap: QueryDocumentSnapshot<DocumentData>) => {
             if (docSnap.exists()) {
                 const gameData = docSnap.data() as GameState;
                 setGame(gameData);
                 setError('');
-                // If we are in this room, re-confirm our session storage
                 sessionStorage.setItem('roomId', roomId);
                 if (localPlayerId && gameData.players[localPlayerId]) {
                     sessionStorage.setItem('localPlayerId', localPlayerId);
@@ -117,7 +106,7 @@ const App: React.FC = () => {
                 setError(`ไม่พบห้อง ${roomId}`);
                 handleBackToHome();
             }
-        }, (err) => {
+        }, (err: Error) => {
             console.error("Firebase subscription error:", err);
             setError("เกิดข้อผิดพลาดในการเชื่อมต่อ");
             handleBackToHome();
@@ -126,7 +115,6 @@ const App: React.FC = () => {
         return () => unsubscribe();
     }, [roomId, localPlayerId]);
 
-    // Turn timer logic
     useEffect(() => {
         if (game?.phase === GamePhase.Playing && game.settings.turnTimeLimit > 0 && game.currentPlayerId === localPlayerId) {
             setRemainingTime(game.settings.turnTimeLimit);
@@ -144,17 +132,15 @@ const App: React.FC = () => {
         }
     }, [game?.phase, game?.settings?.turnTimeLimit, game?.currentPlayerId, localPlayerId]);
     
-    // Bot turn logic (runs only on host's client)
     useEffect(() => {
         if (!game || game.phase !== GamePhase.Playing || game.hostId !== localPlayerId) return;
 
         const currentPlayer = game.players[game.currentPlayerId!];
         if (currentPlayer?.isBot) {
-            // Delay bot action to make it feel more natural
             const botThinkTime = 1500 + Math.random() * 1000;
             const timer = setTimeout(() => {
                 const botGuess = generateNumber(game.settings.digitCount);
-                handleSubmitGuess(botGuess, true); // isBotGuess = true
+                handleSubmitGuess(botGuess, true);
             }, botThinkTime);
             return () => clearTimeout(timer);
         }
@@ -234,7 +220,6 @@ const App: React.FC = () => {
     const handleStartGame = async () => {
         if (!game || game.hostId !== localPlayerId) return;
         
-        // Fill remaining slots with bots if necessary
         const currentPlayersCount = Object.keys(game.players).length;
         const botsToAddCount = game.settings.playerCount - currentPlayersCount;
         let finalPlayers = { ...game.players };
@@ -248,7 +233,7 @@ const App: React.FC = () => {
                 isFound: false,
                 history: [],
                 isBot: true,
-                isReady: true // Bots are always ready
+                isReady: true
             };
             finalPlayers[botId] = botPlayer;
         }
@@ -268,7 +253,6 @@ const App: React.FC = () => {
         });
     };
     
-    // Logic to transition from Setup to Playing (runs on host's client)
     useEffect(() => {
         if (game?.phase !== GamePhase.Setup || game.hostId !== localPlayerId) return;
 
@@ -384,7 +368,7 @@ const App: React.FC = () => {
 
     const handleUpdateSettings = async (newSettings: Partial<GameSettings>) => {
         if (!game || game.hostId !== localPlayerId) return;
-        let settingsUpdate = {};
+        const settingsUpdate: { [key: string]: any } = {};
         for (const [key, value] of Object.entries(newSettings)) {
             settingsUpdate[`settings.${key}`] = value;
         }
@@ -410,7 +394,7 @@ const App: React.FC = () => {
     const renderContent = () => {
         if (!game) {
             if (roomId) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">กำลังโหลดห้อง...</div>
-            return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={(name) => setGame({ phase: GamePhase.Join } as GameState)} error={error} />;
+            return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={() => setGame({ phase: GamePhase.Join } as GameState)} error={error} />;
         }
 
         switch (game.phase) {
@@ -452,7 +436,7 @@ const App: React.FC = () => {
                         />;
             case GamePhase.Home:
             default:
-                 return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={(name) => setGame({ phase: GamePhase.Join } as GameState)} error={error} />;
+                 return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={() => setGame({ phase: GamePhase.Join } as GameState)} error={error} />;
         }
     };
 
