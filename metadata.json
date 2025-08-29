@@ -1,0 +1,5 @@
+{
+  "name": "ทายเลขทายใจ (Number Guessing Game)",
+  "description": "A multiplayer number guessing game where 2-6 players try to guess each other's secret numbers. Players receive clues about correctly placed and misplaced digits. The last player whose number is not guessed wins.",
+  "requestFramePermissions": []
+}
