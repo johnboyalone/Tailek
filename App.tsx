@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField, DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField, DocumentData, DocumentSnapshot } from 'firebase/firestore';
 import { db } from './utils/firebase';
 import { GamePhase } from './types';
 import type { Player, GameSettings, Guess, GameState } from './types';
@@ -93,7 +93,7 @@ const App: React.FC = () => {
             return;
         }
         const gameDocRef = doc(db, 'games', roomId);
-        const unsubscribe = onSnapshot(gameDocRef, (docSnap: QueryDocumentSnapshot<DocumentData>) => {
+        const unsubscribe = onSnapshot(gameDocRef as any, (docSnap: DocumentSnapshot<DocumentData>) => {
             if (docSnap.exists()) {
                 const gameData = docSnap.data() as GameState;
                 setGame(gameData);
