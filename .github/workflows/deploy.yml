@@ -18,7 +18,7 @@ jobs:
           node-version: '18'
 
       - name: Install Dependencies
-        run: npm ci  # <--- เปลี่ยนจาก npm install เป็น npm ci ตรงนี้
+        run: npm install
 
       - name: Build Project
         run: npm run build
