@@ -5,13 +5,14 @@ import { getFirestore, DocumentData, QueryDocumentSnapshot } from "firebase/fire
 // TODO: PASTE YOUR FIREBASE CONFIGURATION OBJECT HERE
 // คุณสามารถหาค่าเหล่านี้ได้จากหน้า Project Settings ใน Firebase Console ของคุณ
 // =================================================================================
+// ใช้ Environment Variables เพื่อความปลอดภัย
 const firebaseConfig = {
-  apiKey: "AIzaSyCNhlBoxWAvuFxol5YZM5zbcS6MAxiusx0",
-  authDomain: "tailek.firebaseapp.com",
-  projectId: "tailek",
-  storageBucket: "tailek.appspot.com",
-  messagingSenderId: "532397147592",
-  appId: "1:532397147592:web:708de36fcf69af95caacfd"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY, // Changed to use environment variable
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 // Initialize Firebase
