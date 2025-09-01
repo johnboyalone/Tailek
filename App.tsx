@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField, DocumentData, DocumentSnapshot } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, onSnapshot, collection, deleteField, DocumentData, DocumentSnapshot, FieldValue } from 'firebase/firestore';
 import { db } from './utils/firebase';
 import { GamePhase } from './types';
 import type { Player, GameSettings, Guess, GameState } from './types';
@@ -23,66 +23,52 @@ const generateNumber = (count: number): string[] => {
 
 const calculateNextTurn = (
     game: GameState
-): { nextGuesserId: string; nextTargetId: string } | null => {
+) => {
     const { players, turnOrder, currentPlayerId, targetPlayerId } = game;
-
-    if (!targetPlayerId || !currentPlayerId) {
-        // Should not happen if game is in PLAYING phase but good for type safety/robustness
-        return null;
-    }
+    // Ensure targetPlayerId and currentPlayerId are defined for calculation
+    if (!targetPlayerId || !currentPlayerId) return null;
 
     const targetPlayer = players[targetPlayerId];
-    const targetWasJustFound = targetPlayer?.isFound; // Use optional chaining for safety
+    const targetWasJustFound = targetPlayer.isFound;
 
-    const activePlayers = turnOrder.filter(id => !players[id]?.isFound); // Use optional chaining for safety
+    const activePlayers = turnOrder.filter(id => !players[id].isFound);
     if (activePlayers.length <= 1) {
-        return null; // Game over or only one player left (which means they are the target/winner)
+        return null; // Game over
     }
     
-    // Players who can guess (everyone except the current target)
     const guessersForCurrentTarget = activePlayers.filter(id => id !== targetPlayerId);
     
-    // If somehow no guessers are left for current target (e.g., target is the only active player)
-    if (guessersForCurrentTarget.length === 0) {
-        return null; // This should imply game over.
-    }
-
     const lastGuesserIndex = guessersForCurrentTarget.indexOf(currentPlayerId);
 
-    if (targetWasJustFound || lastGuesserIndex === guessersForCurrentTarget.length - 1) {
-        // Either the target was just found, or it's the last guesser's turn for the current target.
-        // Move to the next target in the turn order.
-        const currentTargetIndexInTurnOrder = turnOrder.indexOf(targetPlayerId);
-        let nextTargetIdCandidate: string | null = null;
-        let searchIndex = currentTargetIndexInTurnOrder;
-
-        // Find the next active player in turn order to be the target
-        // Loop through turnOrder starting from next player after current target
-        for (let i = 0; i < turnOrder.length; i++) {
-            searchIndex = (searchIndex + 1) % turnOrder.length;
-            const potentialTargetId = turnOrder[searchIndex];
+    const isLastGuesserOfRound = lastGuesserIndex === guessersForCurrentTarget.length - 1;
+    
+    if (targetWasJustFound || isLastGuesserOfRound) {
+        const lastTargetTurnIndex = turnOrder.indexOf(targetPlayerId);
+        let nextTargetId = '';
+        let currentIndex = lastTargetTurnIndex;
+        do {
+            currentIndex = (currentIndex + 1) % turnOrder.length;
+            const potentialTargetId = turnOrder[currentIndex];
             if (activePlayers.includes(potentialTargetId)) {
-                nextTargetIdCandidate = potentialTargetId;
-                break;
+                nextTargetId = potentialTargetId;
             }
-        }
+        } while (nextTargetId === '' && turnOrder.length > 0);
 
-        if (!nextTargetIdCandidate) {
-            return null; // No valid next target found among active players
-        }
+        // If no next target found (e.g., only one active player left which is the current target), return null for game over
+        if (nextTargetId === '') return null;
 
-        const guessersForNewTarget = activePlayers.filter(id => id !== nextTargetIdCandidate);
-        if (guessersForNewTarget.length === 0) {
-            return null; // No guessers for the new target, game over.
-        }
+        const guessersForNewTarget = activePlayers.filter(id => id !== nextTargetId);
+        // If no guessers for the new target, it means game is over (only 1 active player left which is the target)
+        if (guessersForNewTarget.length === 0) return null;
+
+        const nextGuesserId = guessersForNewTarget[0];
         
-        const nextGuesserId = guessersForNewTarget[0]; // First guesser for the new target
-        return { nextGuesserId, nextTargetId: nextTargetIdCandidate };
+        return { nextGuesserId, nextTargetId };
 
     } else {
-        // Same target, next guesser in line
         const nextGuesserId = guessersForCurrentTarget[lastGuesserIndex + 1];
-        return { nextGuesserId, nextTargetId: targetPlayerId };
+        const nextTargetId = targetPlayerId;
+        return { nextGuesserId, nextTargetId };
     }
 };
 
@@ -155,24 +141,132 @@ const App: React.FC = () => {
             return () => clearInterval(timer);
         }
     }, [game?.phase, game?.settings?.turnTimeLimit, game?.currentPlayerId, localPlayerId]);
-    
-    useEffect(() => {
-        if (!game || game.phase !== GamePhase.Playing || game.hostId !== localPlayerId || !game.currentPlayerId) return; // Only host manages bot turns, and ensure currentPlayerId exists
 
-        const currentPlayer = game.players[game.currentPlayerId];
+    const handleSubmitGuess = useCallback(async (guess: string[], isBotGuess: boolean = false) => {
+        if (!game || (!isBotGuess && game.currentPlayerId !== localPlayerId)) return;
+        if (!game.currentPlayerId || !game.targetPlayerId) return;
+        
+        const { currentPlayerId, targetPlayerId, settings } = game;
+        const guesserId = currentPlayerId;
+        const currentTargetId = targetPlayerId;
+
+        let updatedPlayers = { ...game.players };
+
+        const targetPlayer = updatedPlayers[currentTargetId];
+        const guesserPlayer = updatedPlayers[guesserId];
+
+        if (!targetPlayer || targetPlayer.isFound || !guesserPlayer) return;
+
+        const secret = [...targetPlayer.secretNumber];
+        const guessAttempt = [...guess];
+        let correct = 0, misplaced = 0;
+        
+        for (let i = 0; i < settings.digitCount; i++) {
+            if (secret[i] === guessAttempt[i]) {
+                correct++; 
+                secret[i] = 'C';
+                guessAttempt[i] = 'C';
+            }
+        }
+        for (let i = 0; i < settings.digitCount; i++) {
+            if (guessAttempt[i] === 'C') continue;
+            const misplacedIndex = secret.indexOf(guessAttempt[i]);
+            if (misplacedIndex !== -1) {
+                misplaced++; 
+                secret[misplacedIndex] = 'M';
+            }
+        }
+
+        const newGuess: Guess = { value: guess.join(''), correct, misplaced, guesserId, guesserName: guesserPlayer.name };
+        const playerFound = correct === settings.digitCount;
+        
+        updatedPlayers[currentTargetId] = {
+            ...updatedPlayers[currentTargetId],
+            history: [...updatedPlayers[currentTargetId].history, newGuess],
+            isFound: playerFound || updatedPlayers[currentTargetId].isFound
+        };
+
+        const activePlayersCount = Object.values(updatedPlayers).filter(p => !p.isFound).length;
+        
+        let updatePayload: DocumentData = {}; // Changed type to DocumentData for flexibility with deleteField
+
+        if (activePlayersCount <= 1) {
+            const finalWinner = Object.values(updatedPlayers).find(p => !p.isFound);
+            let availableLosingTitles = [...LOSING_TITLES].sort(() => 0.5 - Math.random());
+            
+            Object.keys(updatedPlayers).forEach(pid => {
+                updatedPlayers[pid] = { ...updatedPlayers[pid] };
+                updatedPlayers[pid].title = pid === finalWinner?.id
+                   ? WINNING_TITLES[Math.floor(Math.random() * WINNING_TITLES.length)]
+                   : (availableLosingTitles.pop() || "ผู้ร่วมชะตากรรม");
+            });
+
+            updatePayload = {
+                phase: GamePhase.GameOver,
+                players: updatedPlayers,
+                winnerId: finalWinner?.id || null,
+                lastBotGuess: deleteField() as FieldValue // Explicitly cast to FieldValue
+            };
+            soundManager.play(finalWinner?.id === localPlayerId ? 'win' : 'lose');
+        } else {
+            const nextTurn = calculateNextTurn({ ...game, players: updatedPlayers });
+            
+            if (nextTurn) {
+                updatePayload.currentPlayerId = nextTurn.nextGuesserId;
+                updatePayload.targetPlayerId = nextTurn.nextTargetId;
+                updatePayload.players = updatedPlayers;
+            } else {
+                console.warn("calculateNextTurn returned null unexpectedly when activePlayersCount > 1, forcing Game Over.");
+                updatePayload.phase = GamePhase.GameOver;
+                updatePayload.winnerId = Object.values(updatedPlayers).find(p => !p.isFound)?.id || null;
+                updatePayload.players = updatedPlayers;
+            }
+
+            if (guesserPlayer.isBot) {
+                updatePayload.lastBotGuess = { guesserId, guess };
+            } else {
+                updatePayload.lastBotGuess = deleteField() as FieldValue; // Explicitly cast to FieldValue
+            }
+        }
+
+        await updateDoc(doc(db, 'games', game.id), updatePayload);
+    }, [game, localPlayerId]);
+
+    useEffect(() => {
+        if (!game || game.phase !== GamePhase.Playing || game.hostId !== localPlayerId) return;
+
+        const currentPlayer = game.players[game.currentPlayerId!];
         if (currentPlayer?.isBot) {
-            const botThinkTime = 1500 + Math.random() * 1000; // Randomize bot think time
+            const botThinkTime = 1500 + Math.random() * 1000;
             const timer = setTimeout(() => {
                 const botGuess = generateNumber(game.settings.digitCount);
-                handleSubmitGuess(botGuess, true); // Bot guesses
+                handleSubmitGuess(botGuess, true);
             }, botThinkTime);
             return () => clearTimeout(timer);
         }
-    }, [game?.currentPlayerId, game?.phase, game?.hostId, localPlayerId, game?.settings?.digitCount, handleSubmitGuess]); // Added dependencies to useCallback
+    }, [game?.currentPlayerId, game?.phase, game?.hostId, localPlayerId, game?.settings?.digitCount]); // Removed handleSubmitGuess from dependencies
 
+    const handleTurnTimeout = useCallback(async () => {
+        if (!game || game.currentPlayerId !== localPlayerId || game.settings.turnTimeLimit <= 0) return;
+        
+        const nextTurn = calculateNextTurn(game);
+        if (nextTurn) {
+             await updateDoc(doc(db, 'games', game.id), {
+                currentPlayerId: nextTurn.nextGuesserId,
+                targetPlayerId: nextTurn.nextTargetId
+             });
+        } else {
+            console.warn("Turn timeout led to game over (no next turn possible).");
+            await updateDoc(doc(db, 'games', game.id), {
+                phase: GamePhase.GameOver,
+                winnerId: Object.values(game.players).find(p => !p.isFound)?.id || null
+            });
+        }
+    }, [game, localPlayerId]);
+    
     const handleCreateLobby = async (playerName: string) => {
         const newRoomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
-        const newPlayerId = doc(collection(db, 'temp')).id; // Generate a unique ID for the player
+        const newPlayerId = doc(collection(db, 'temp')).id;
         
         const hostPlayer: Player = {
             id: newPlayerId, name: playerName, secretNumber: [], isFound: false, history: []
@@ -239,11 +333,11 @@ const App: React.FC = () => {
         setError('');
         sessionStorage.removeItem('roomId');
         sessionStorage.removeItem('localPlayerId');
-        soundManager.stopBgm(); // Ensure BGM stops when going home
+        soundManager.stopBgm();
     };
     
     const handleStartGame = async () => {
-        if (!game || game.hostId !== localPlayerId) return; // Only host can start game
+        if (!game || game.hostId !== localPlayerId) return;
         
         const currentPlayersCount = Object.keys(game.players).length;
         const botsToAddCount = game.settings.playerCount - currentPlayersCount;
@@ -253,12 +347,12 @@ const App: React.FC = () => {
             const botId = doc(collection(db, 'temp')).id;
             const botPlayer: Player = {
                 id: botId,
-                name: `Bot ${Object.values(game.players).filter(p => p.isBot).length + i + 1}`, // Ensure unique bot names if adding multiple
+                name: `Bot ${Object.values(game.players).filter(p => p.isBot).length + i + 1}`,
                 secretNumber: generateNumber(game.settings.digitCount),
                 isFound: false,
                 history: [],
                 isBot: true,
-                isReady: true // Bots are always ready
+                isReady: true
             };
             finalPlayers[botId] = botPlayer;
         }
@@ -279,18 +373,17 @@ const App: React.FC = () => {
     };
     
     useEffect(() => {
-        if (game?.phase !== GamePhase.Setup || game.hostId !== localPlayerId) return; // Only host manages game start from setup
+        if (game?.phase !== GamePhase.Setup || game.hostId !== localPlayerId) return;
 
         const allPlayersReady = Object.values(game.players).every(p => p.isReady);
 
         if (allPlayersReady) {
             const turnOrder = Object.keys(game.players).sort(() => Math.random() - 0.5);
             const initialGuesserId = turnOrder[0];
-            // Initial target should be an active player, and not the guesser
             const potentialTargets = turnOrder.filter(id => id !== initialGuesserId && !game.players[id].isFound);
-            const initialTargetId = potentialTargets.length > 0 ? potentialTargets[0] : null; // Fallback to null if no valid target
+            const initialTargetId = potentialTargets.length > 0 ? potentialTargets[0] : null;
 
-            if (initialTargetId) { // Only start if a valid target exists
+            if (initialTargetId) {
                 updateDoc(doc(db, 'games', game.id), {
                     phase: GamePhase.Playing,
                     turnOrder,
@@ -298,130 +391,14 @@ const App: React.FC = () => {
                     targetPlayerId: initialTargetId
                 });
             } else {
-                // This case should ideally not happen if there are at least 2 players, but as a safeguard
                 console.warn("Could not determine initial target, transitioning to game over.");
                 updateDoc(doc(db, 'games', game.id), {
                     phase: GamePhase.GameOver,
-                    winnerId: initialGuesserId // The only remaining player is the winner (or null if no guesser was set)
+                    winnerId: initialGuesserId || null // Using null for consistency with types.ts
                 });
             }
         }
     }, [game?.phase, game?.players, game?.hostId, localPlayerId]);
-
-    const handleSubmitGuess = useCallback(async (guess: string[], isBotGuess: boolean = false) => {
-        if (!game || (!isBotGuess && game.currentPlayerId !== localPlayerId)) return;
-        if (!game.currentPlayerId || !game.targetPlayerId) return; // Safeguard against undefined IDs
-        
-        const { currentPlayerId, targetPlayerId, settings } = game;
-        const guesserId = currentPlayerId;
-        const currentTargetId = targetPlayerId;
-
-        // Create a mutable copy of the players object to prepare for update
-        let updatedPlayers = { ...game.players };
-
-        const targetPlayer = updatedPlayers[currentTargetId];
-        const guesserPlayer = updatedPlayers[guesserId];
-
-        if (!targetPlayer || targetPlayer.isFound || !guesserPlayer) return; // Guard against invalid states
-
-        // Calculate correct and misplaced digits
-        const secret = [...targetPlayer.secretNumber];
-        const guessAttempt = [...guess];
-        let correct = 0, misplaced = 0;
-        
-        for (let i = 0; i < settings.digitCount; i++) {
-            if (secret[i] === guessAttempt[i]) {
-                correct++; 
-                secret[i] = 'C'; // Mark as used
-                guessAttempt[i] = 'C'; // Mark as used
-            }
-        }
-        for (let i = 0; i < settings.digitCount; i++) {
-            if (guessAttempt[i] === 'C') continue; // Skip already correctly placed digits
-            const misplacedIndex = secret.indexOf(guessAttempt[i]);
-            if (misplacedIndex !== -1) {
-                misplaced++; 
-                secret[misplacedIndex] = 'M'; // Mark as used
-            }
-        }
-
-        const newGuess: Guess = { value: guess.join(''), correct, misplaced, guesserId, guesserName: guesserPlayer.name };
-        const playerFound = correct === settings.digitCount;
-        
-        // Update the target player's history and found status in the local copy
-        updatedPlayers[currentTargetId] = {
-            ...updatedPlayers[currentTargetId],
-            history: [...updatedPlayers[currentTargetId].history, newGuess],
-            isFound: playerFound || updatedPlayers[currentTargetId].isFound
-        };
-
-        const activePlayersCount = Object.values(updatedPlayers).filter(p => !p.isFound).length;
-        let gameUpdate: Partial<GameState> & { [key: string]: any } = {}; // Use any for deleteField
-
-        if (activePlayersCount <= 1) {
-            // Game Over scenario
-            const finalWinner = Object.values(updatedPlayers).find(p => !p.isFound);
-            let availableLosingTitles = [...LOSING_TITLES].sort(() => 0.5 - Math.random());
-            
-            Object.keys(updatedPlayers).forEach(pid => {
-                updatedPlayers[pid] = { ...updatedPlayers[pid] }; // Create new object to avoid direct mutation issues
-                updatedPlayers[pid].title = pid === finalWinner?.id
-                   ? WINNING_TITLES[Math.floor(Math.random() * WINNING_TITLES.length)]
-                   : (availableLosingTitles.pop() || "ผู้ร่วมชะตากรรม");
-            });
-
-            gameUpdate = {
-                phase: GamePhase.GameOver,
-                players: updatedPlayers, // Update the entire players map with titles and current changes
-                winnerId: finalWinner?.id || null,
-                lastBotGuess: deleteField() // Clear last bot guess on game over
-            };
-            soundManager.play(finalWinner?.id === localPlayerId ? 'win' : 'lose');
-        } else {
-            // Game continues
-            const nextTurn = calculateNextTurn({ ...game, players: updatedPlayers }); // Pass the provisional game state
-            
-            if (nextTurn) {
-                gameUpdate.currentPlayerId = nextTurn.nextGuesserId;
-                gameUpdate.targetPlayerId = nextTurn.nextTargetId;
-                gameUpdate.players = updatedPlayers; // Update the players map with current changes
-            } else {
-                // This case should ideally not happen if activePlayersCount > 1, but as a fallback
-                console.warn("calculateNextTurn returned null unexpectedly when activePlayersCount > 1, forcing Game Over.");
-                gameUpdate.phase = GamePhase.GameOver;
-                gameUpdate.winnerId = Object.values(updatedPlayers).find(p => !p.isFound)?.id || null;
-                gameUpdate.players = updatedPlayers;
-            }
-
-            if (guesserPlayer.isBot) {
-                gameUpdate.lastBotGuess = { guesserId, guess };
-            } else {
-                gameUpdate['lastBotGuess'] = deleteField(); // Remove field if not a bot guess
-            }
-        }
-
-        await updateDoc(doc(db, 'games', game.id), gameUpdate);
-    }, [game, localPlayerId]); // Added localPlayerId to dependencies
-    
-    const handleTurnTimeout = useCallback(async () => {
-        if (!game || game.currentPlayerId !== localPlayerId || game.settings.turnTimeLimit <= 0) return;
-        
-        const nextTurn = calculateNextTurn(game);
-        if (nextTurn) {
-             await updateDoc(doc(db, 'games', game.id), {
-                currentPlayerId: nextTurn.nextGuesserId,
-                targetPlayerId: nextTurn.nextTargetId
-             });
-        } else {
-            // If nextTurn is null, it means game is over
-            console.warn("Turn timeout led to game over (no next turn possible).");
-            await updateDoc(doc(db, 'games', game.id), {
-                phase: GamePhase.GameOver, // Transition to Game Over
-                // Determine winner if possible, or set to null
-                winnerId: Object.values(game.players).find(p => !p.isFound)?.id || null
-            });
-        }
-    }, [game, localPlayerId]);
     
     const handleSendMessage = async (message: string) => {
         if (!game || !localPlayerId) return;
@@ -431,7 +408,7 @@ const App: React.FC = () => {
     };
 
     const handleUpdateSettings = async (newSettings: Partial<GameSettings>) => {
-        if (!game || game.hostId !== localPlayerId) return; // Only host can update settings
+        if (!game || game.hostId !== localPlayerId) return;
         const settingsUpdate: { [key: string]: any } = {};
         for (const [key, value] of Object.entries(newSettings)) {
             settingsUpdate[`settings.${key}`] = value;
@@ -440,7 +417,7 @@ const App: React.FC = () => {
     };
 
     const handleAddBot = async () => {
-        if (!game || game.hostId !== localPlayerId || Object.keys(game.players).length >= game.settings.playerCount) return; // Host can add bot, up to max players
+        if (!game || game.hostId !== localPlayerId || Object.keys(game.players).length >= game.settings.playerCount) return;
         const botId = doc(collection(db, 'temp')).id;
         const botPlayer: Player = {
             id: botId,
@@ -451,15 +428,13 @@ const App: React.FC = () => {
     };
 
     const handleRemovePlayer = async (playerId: string) => {
-        if (!game || game.hostId !== localPlayerId || playerId === localPlayerId) return; // Host can remove players, but not self
+        if (!game || game.hostId !== localPlayerId || playerId === localPlayerId) return;
         await updateDoc(doc(db, 'games', game.id), { [`players.${playerId}`]: deleteField() });
     };
 
     const renderContent = () => {
         if (!game) {
-            // If roomId exists but game is null, it implies loading. Show loading screen.
             if (roomId) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">กำลังโหลดห้อง...</div>;
-            // Otherwise, show home screen
             return <HomeScreen onCreateLobby={handleCreateLobby} onJoinRequest={() => setGame({ phase: GamePhase.Join } as GameState)} error={error} />;
         }
 

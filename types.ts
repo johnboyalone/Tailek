@@ -11,7 +11,7 @@ export interface Guess {
   value: string;
   correct: number;
   misplaced: number;
-  guesserId: string; // Changed from number
+  guesserId: string;
   guesserName: string; 
 }
 
@@ -21,13 +21,13 @@ export interface ChatMessage {
 }
 
 export interface Player {
-  id: string; // Changed from number
+  id: string;
   name: string;
   secretNumber: string[];
   isFound: boolean;
   history: Guess[];
   isBot?: boolean;
-  isReady?: boolean; // For setup phase
+  isReady?: boolean;
   title?: string;
   lastMessage?: ChatMessage;
 }
@@ -35,20 +35,19 @@ export interface Player {
 export interface GameSettings {
   playerCount: number;
   digitCount: number;
-  turnTimeLimit: number; // in seconds. 0 means no limit.
+  turnTimeLimit: number;
 }
 
-// Represents the entire game state document in Firestore
 export interface GameState {
-    id: string; // Room Code
+    id: string;
     phase: GamePhase;
     settings: GameSettings;
-    players: { [key: string]: Player }; // Use a map for easier updates
+    players: { [key: string]: Player };
     hostId: string;
-    turnOrder: string[]; // Array of player IDs
+    turnOrder: string[];
     currentPlayerId?: string;
     targetPlayerId?: string;
-    winnerId?: string;
+    winnerId?: string | null; 
     createdAt: number;
     lastBotGuess?: { guesserId: string, guess: string[] } | null;
 }
