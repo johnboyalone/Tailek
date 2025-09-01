@@ -7,7 +7,7 @@ import { getFirestore, DocumentData, QueryDocumentSnapshot } from "firebase/fire
 // =================================================================================
 // ใช้ Environment Variables เพื่อความปลอดภัย
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY, // Changed to use environment variable
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
