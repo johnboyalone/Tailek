@@ -7,21 +7,11 @@
     <title>ทายเลขทายใจ - Number Guessing Game</title>
     <!-- Tailwind CSS CDN is used for development purposes. For production, it's recommended to compile Tailwind to optimize file size. -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="/styles.css"> <!-- Externalized custom styles -->
-  <script type="importmap">
-{
-  "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.1.1/",
-    "react": "https://aistudiocdn.com/react@^19.1.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
-    "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
-    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
-    "firebase/": "https://aistudiocdn.com/firebase@^12.2.1/"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
+    <!-- Custom styles should be imported via index.tsx/App.tsx for Vite to process them. Removing direct link. -->
+    <!-- <link rel="stylesheet" href="/styles.css"> -->
+    <!-- <link rel="stylesheet" href="/index.css"> -->
+    <!-- Removed importmap to let Vite handle module resolution and dependencies from node_modules -->
+  </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>

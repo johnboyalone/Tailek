@@ -23,52 +23,66 @@ const generateNumber = (count: number): string[] => {
 
 const calculateNextTurn = (
     game: GameState
-) => {
+): { nextGuesserId: string; nextTargetId: string } | null => {
     const { players, turnOrder, currentPlayerId, targetPlayerId } = game;
-    // Ensure targetPlayerId and currentPlayerId are defined for calculation
-    if (!targetPlayerId || !currentPlayerId) return null;
+
+    if (!targetPlayerId || !currentPlayerId) {
+        // Should not happen if game is in PLAYING phase but good for type safety/robustness
+        return null;
+    }
 
     const targetPlayer = players[targetPlayerId];
-    const targetWasJustFound = targetPlayer.isFound;
+    const targetWasJustFound = targetPlayer?.isFound; // Use optional chaining for safety
 
-    const activePlayers = turnOrder.filter(id => !players[id].isFound);
+    const activePlayers = turnOrder.filter(id => !players[id]?.isFound); // Use optional chaining for safety
     if (activePlayers.length <= 1) {
-        return null; // Game over
+        return null; // Game over or only one player left (which means they are the target/winner)
     }
     
+    // Players who can guess (everyone except the current target)
     const guessersForCurrentTarget = activePlayers.filter(id => id !== targetPlayerId);
     
+    // If somehow no guessers are left for current target (e.g., target is the only active player)
+    if (guessersForCurrentTarget.length === 0) {
+        return null; // This should imply game over.
+    }
+
     const lastGuesserIndex = guessersForCurrentTarget.indexOf(currentPlayerId);
 
-    const isLastGuesserOfRound = lastGuesserIndex === guessersForCurrentTarget.length - 1;
-    
-    if (targetWasJustFound || isLastGuesserOfRound) {
-        const lastTargetTurnIndex = turnOrder.indexOf(targetPlayerId);
-        let nextTargetId = '';
-        let currentIndex = lastTargetTurnIndex;
-        do {
-            currentIndex = (currentIndex + 1) % turnOrder.length;
-            const potentialTargetId = turnOrder[currentIndex];
+    if (targetWasJustFound || lastGuesserIndex === guessersForCurrentTarget.length - 1) {
+        // Either the target was just found, or it's the last guesser's turn for the current target.
+        // Move to the next target in the turn order.
+        const currentTargetIndexInTurnOrder = turnOrder.indexOf(targetPlayerId);
+        let nextTargetIdCandidate: string | null = null;
+        let searchIndex = currentTargetIndexInTurnOrder;
+
+        // Find the next active player in turn order to be the target
+        // Loop through turnOrder starting from next player after current target
+        for (let i = 0; i < turnOrder.length; i++) {
+            searchIndex = (searchIndex + 1) % turnOrder.length;
+            const potentialTargetId = turnOrder[searchIndex];
             if (activePlayers.includes(potentialTargetId)) {
-                nextTargetId = potentialTargetId;
+                nextTargetIdCandidate = potentialTargetId;
+                break;
             }
-        } while (nextTargetId === '' && turnOrder.length > 0); // Add check for turnOrder.length to prevent infinite loop if turnOrder is empty
+        }
 
-        // If no next target found (e.g., only one active player left which is the current target), return null for game over
-        if (nextTargetId === '') return null;
+        if (!nextTargetIdCandidate) {
+            return null; // No valid next target found among active players
+        }
 
-        const guessersForNewTarget = activePlayers.filter(id => id !== nextTargetId);
-        // If no guessers for the new target, it means game is over (only 1 active player left which is the target)
-        if (guessersForNewTarget.length === 0) return null;
-
-        const nextGuesserId = guessersForNewTarget[0];
+        const guessersForNewTarget = activePlayers.filter(id => id !== nextTargetIdCandidate);
+        if (guessersForNewTarget.length === 0) {
+            return null; // No guessers for the new target, game over.
+        }
         
-        return { nextGuesserId, nextTargetId };
+        const nextGuesserId = guessersForNewTarget[0]; // First guesser for the new target
+        return { nextGuesserId, nextTargetId: nextTargetIdCandidate };
 
     } else {
+        // Same target, next guesser in line
         const nextGuesserId = guessersForCurrentTarget[lastGuesserIndex + 1];
-        const nextTargetId = targetPlayerId;
-        return { nextGuesserId, nextTargetId };
+        return { nextGuesserId, nextTargetId: targetPlayerId };
     }
 };
 
@@ -143,9 +157,9 @@ const App: React.FC = () => {
     }, [game?.phase, game?.settings?.turnTimeLimit, game?.currentPlayerId, localPlayerId]);
     
     useEffect(() => {
-        if (!game || game.phase !== GamePhase.Playing || game.hostId !== localPlayerId) return; // Only host manages bot turns
+        if (!game || game.phase !== GamePhase.Playing || game.hostId !== localPlayerId || !game.currentPlayerId) return; // Only host manages bot turns, and ensure currentPlayerId exists
 
-        const currentPlayer = game.players[game.currentPlayerId!];
+        const currentPlayer = game.players[game.currentPlayerId];
         if (currentPlayer?.isBot) {
             const botThinkTime = 1500 + Math.random() * 1000; // Randomize bot think time
             const timer = setTimeout(() => {
@@ -288,7 +302,7 @@ const App: React.FC = () => {
                 console.warn("Could not determine initial target, transitioning to game over.");
                 updateDoc(doc(db, 'games', game.id), {
                     phase: GamePhase.GameOver,
-                    winnerId: initialGuesserId // The only remaining player is the winner
+                    winnerId: initialGuesserId // The only remaining player is the winner (or null if no guesser was set)
                 });
             }
         }
