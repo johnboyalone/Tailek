@@ -5,39 +5,9 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>ทายเลขทายใจ - Number Guessing Game</title>
+    <!-- Tailwind CSS CDN is used for development purposes. For production, it's recommended to compile Tailwind to optimize file size. -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-      body {
-          -webkit-font-smoothing: antialiased;
-          -moz-osx-font-smoothing: grayscale;
-          touch-action: manipulation; /* Disables double-tap to zoom */
-      }
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-      .animate-fade-in {
-        animation: fadeIn 0.5s ease-out forwards;
-      }
-      @keyframes shout {
-        0% { transform: scale(0.5) translateY(0); opacity: 0; }
-        20% { transform: scale(1.1) translateY(-10px); opacity: 1; }
-        80% { transform: scale(1) translateY(-10px); opacity: 1; }
-        100% { transform: scale(0.8) translateY(-10px); opacity: 0; }
-      }
-      .animate-shout {
-        animation: shout 2s ease-in-out forwards;
-      }
-      @keyframes chatBubble {
-        0% { opacity: 0; transform: translateY(5px) translateX(-50%); }
-        15% { opacity: 1; transform: translateY(-5px) translateX(-50%); }
-        85% { opacity: 1; transform: translateY(-5px) translateX(-50%); }
-        100% { opacity: 0; transform: translateY(-10px) translateX(-50%); }
-      }
-      .animate-chat-bubble {
-        animation: chatBubble 5s ease-in-out forwards;
-      }
-    </style>
+    <link rel="stylesheet" href="/styles.css"> <!-- Externalized custom styles -->
   <script type="importmap">
 {
   "imports": {

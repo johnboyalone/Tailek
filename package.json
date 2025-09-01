@@ -11,14 +11,14 @@
   "dependencies": {
     "react": "19.1.1",
     "react-dom": "19.1.1",
-    "firebase": "latest"
+    "firebase": "10.12.2"  // Pinned Firebase version for consistency
   },
   "devDependencies": {
-    "@types/node": "22.14.0",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
+    "@types/node": "^20.14.0", // Use a compatible Node types version if needed
+    "@types/react": "^19.0.0", // Updated to React 19 types
+    "@types/react-dom": "^19.0.0", // Updated to React 19 types
     "@vitejs/plugin-react": "^4.3.1",
-    "typescript": "5.2.2",
+    "typescript": "^5.5.0", // Updated to a more recent stable TypeScript version
     "vite": "5.3.1"
   }
 }

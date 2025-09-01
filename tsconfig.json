@@ -10,9 +10,7 @@
       "DOM.Iterable"
     ],
     "skipLibCheck": true,
-    "types": [
-      "node"
-    ],
+    // "types": ["node"], // Removed 'node' types as it's a browser-based app
     "strict": true,
     "noImplicitAny": true,
     "moduleResolution": "bundler",
